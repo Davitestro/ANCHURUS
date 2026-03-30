@@ -229,9 +229,6 @@ The trainer implements a **staircase learning rate adjustment**:
 - **MobileNetV2**: Sandler et al., "MobileNetV2: Inverted Residuals and Linear Bottlenecks"
 - **Knowledge Distillation**: Hinton et al., "Distilling the Knowledge in a Neural Network"
 
-## License
-
-[Specify your license here]
 
 ## Contact
 
