@@ -1,0 +1,6 @@
+Training/videos/
+Training/frames/
+Training/processed/
+venv/
+__pycache__/
+cookies.txt
