@@ -1,24 +1,28 @@
+
+from pathlib import Path
+
 import cv2
 import torch
 import numpy as np
+import torch.nn as nn
 from torchvision import transforms
 from torchvision.models import mobilenet_v2
-import torch.nn as nn
 
-# Configuration
-MODEL_PATH = "models/ANCHURUS(v.5).pth"
+
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "models" / "ANCHURUS(v.5).pth"
+
 IMG_SIZE = (256, 256)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ANCHURUS model definition - must match training architecture
+
 class ANCHURUS(nn.Module):
-    def __init__(self):
+    def __init__(self, pretrained=False):
         super().__init__()
-        # MobileNetV2 pre-trained encoder
-        base_model = mobilenet_v2(pretrained=True)
+
+        base_model = mobilenet_v2(pretrained=pretrained)
         self.encoder = base_model.features
-        
-        # Progressive upsampling decoder
+
         self.decoder = nn.Sequential(
             self._up_block(1280, 512),
             self._up_block(512, 256),
@@ -30,12 +34,15 @@ class ANCHURUS(nn.Module):
         )
 
     def _up_block(self, in_c, out_c):
-        """Upsampling block with convolution, batch norm, and bilinear interpolation"""
         return nn.Sequential(
             nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_c),
             nn.ReLU(inplace=True),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+            nn.Upsample(
+                scale_factor=2,
+                mode="bilinear",
+                align_corners=False
+            )
         )
 
     def forward(self, x):
@@ -43,54 +50,86 @@ class ANCHURUS(nn.Module):
         return self.decoder(features)
 
 
-# Load pre-trained model
-model = ANCHURUS().to(DEVICE)
-model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-model.eval()
+def load_model(checkpoint_path=MODEL_PATH, device=DEVICE):
+    model = ANCHURUS(pretrained=False).to(device)
 
-# Image preprocessing pipeline - ImageNet normalization for MobileNetV2
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=device,
+        weights_only=True
+    )
+
+    model.load_state_dict(checkpoint)
+    model.eval()
+
+    return model
+
+
 transform = transforms.Compose([
     transforms.ToPILImage(),
     transforms.Resize(IMG_SIZE),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
 ])
 
-# Initialize webcam
-cap = cv2.VideoCapture(0)
 
-print("Starting depth estimation... Press 'q' to quit.")
+def run_webcam():
+    model = load_model()
 
-# Main inference loop
-with torch.no_grad():
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret: break
+    cap = cv2.VideoCapture(0)
 
-        # Convert frame to RGB and normalize
-        input_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        input_tensor = transform(input_frame).unsqueeze(0).to(DEVICE)
+    if not cap.isOpened():
+        raise RuntimeError("Could not open webcam")
 
-        # Run depth estimation
-        depth_output = model(input_tensor)
-        
-        # Convert depth output to 8-bit image for display
-        depth_map = depth_output.squeeze().cpu().numpy()
-        depth_map = (depth_map * 255).astype(np.uint8)
-        
-        # Apply colormap for better depth visualization
-        depth_color = cv2.applyColorMap(depth_map, cv2.COLORMAP_MAGMA)
-        
-        # Resize depth to match original frame dimensions
-        depth_resized = cv2.resize(depth_color, (frame.shape[1], frame.shape[0]))
+    print("Starting depth estimation... Press 'q' to quit.")
 
-        # Combine RGB and depth side-by-side for display
-        combined = np.hstack((frame, depth_resized))
+    try:
+        with torch.no_grad():
+            while cap.isOpened():
+                ret, frame = cap.read()
 
-        cv2.imshow('RGB (Left) / Depth (Right)', combined)
+                if not ret:
+                    break
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+                input_frame = cv2.cvtColor(
+                    frame,
+                    cv2.COLOR_BGR2RGB
+                )
 
-cap.release()
-cv2.destroyAllWindows()
+                input_tensor = transform(input_frame).unsqueeze(0).to(DEVICE)
+
+                depth_output = model(input_tensor)
+
+                depth_map = depth_output.squeeze().cpu().numpy()
+                depth_map = (depth_map * 255).astype(np.uint8)
+
+                depth_color = cv2.applyColorMap(
+                    depth_map,
+                    cv2.COLORMAP_MAGMA
+                )
+
+                depth_resized = cv2.resize(
+                    depth_color,
+                    (frame.shape[1], frame.shape[0])
+                )
+
+                combined = np.hstack((frame, depth_resized))
+
+                cv2.imshow(
+                    "RGB (Left) / Depth (Right)",
+                    combined
+                )
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    run_webcam()
